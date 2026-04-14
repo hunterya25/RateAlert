@@ -1,75 +1,103 @@
 package com.ratealert.currencytracker.worker
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import androidx.work.*
+import com.ratealert.currencytracker.receiver.AlarmReceiver
 import com.ratealert.currencytracker.utils.Constants
 import java.util.concurrent.TimeUnit
 
 object WorkerScheduler {
     
+    private const val ALARM_REQUEST_CODE = 1001
+    
+    fun scheduleExactAlarm(context: Context, delayMinutes: Long) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, AlarmReceiver::class.java)
+        
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val triggerAtMillis = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes)
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            }
+        } catch (e: SecurityException) {
+            val fallbackTrigger = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes)
+            alarmManager.set(
+                AlarmManager.RTC_WAKEUP,
+                fallbackTrigger,
+                pendingIntent
+            )
+        }
+    }
+
+    fun cancelAlarm(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, AlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
+    }
+
     fun scheduleWork(context: Context, intervalMinutes: Long = 15) {
         cancelWork(context)
-        
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-        
-        val workRequest = PeriodicWorkRequestBuilder<CurrencyWorker>(
-            intervalMinutes.coerceAtLeast(15), TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .addTag(Constants.WORK_TAG)
-            .setBackoffCriteria(
-                BackoffPolicy.LINEAR,
-                WorkRequest.MIN_BACKOFF_MILLIS,
-                TimeUnit.MILLISECONDS
-            )
-            .build()
-        
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            Constants.WORK_TAG,
-            ExistingPeriodicWorkPolicy.REPLACE,
-            workRequest
-        )
+        scheduleExactAlarm(context, intervalMinutes)
     }
     
     fun scheduleRepeatingWork(context: Context, intervalMinutes: Long) {
         cancelWork(context)
-        scheduleOneTimeWork(context, intervalMinutes)
+        scheduleExactAlarm(context, intervalMinutes)
     }
     
     fun scheduleOneTimeWork(context: Context, delayMinutes: Long) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-        
-        val oneTimeWork = OneTimeWorkRequestBuilder<CurrencyWorker>()
-            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
-            .setConstraints(constraints)
-            .addTag(Constants.WORK_TAG)
-            .build()
-        
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            Constants.WORK_TAG,
-            ExistingWorkPolicy.REPLACE,
-            oneTimeWork
-        )
+        scheduleExactAlarm(context, delayMinutes)
     }
     
     fun runImmediately(context: Context) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-        
-        val immediateWork = OneTimeWorkRequestBuilder<CurrencyWorker>()
-            .setConstraints(constraints)
-            .addTag("${Constants.WORK_TAG}_immediate")
-            .build()
-        
-        WorkManager.getInstance(context).enqueue(immediateWork)
+        val intent = Intent(context, AlarmReceiver::class.java)
+        context.sendBroadcast(intent)
     }
     
     fun cancelWork(context: Context) {
         WorkManager.getInstance(context).cancelAllWorkByTag(Constants.WORK_TAG)
+        cancelAlarm(context)
     }
 }
